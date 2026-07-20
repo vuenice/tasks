@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col overflow-hidden">
+  <div class="routine-tab h-full flex flex-col overflow-hidden">
     <div class="flex-1 overflow-y-auto px-6 py-5 space-y-4">
 
       <!-- Header -->
@@ -121,7 +121,7 @@
 
         <div>
           <label class="label">Label</label>
-          <input v-model="form.label" class="input" type="text" placeholder="e.g. Daily standup" />
+          <input v-model="form.label" class="input" type="text" placeholder="Routine label…" />
         </div>
         <div>
           <label class="label">Schedule <span class="text-gray-600 font-normal normal-case">(cron)</span></label>

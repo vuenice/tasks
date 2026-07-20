@@ -6,7 +6,7 @@
       <!-- Toolbar -->
       <div class="flex items-center justify-between px-6 py-3 border-b border-gray-800 shrink-0">
         <span class="text-sm text-gray-400">
-          {{ todoTasks.length + inProgressTasks.length }} active tasks
+          {{ todoTasks.length + inProgressTasks.length }} active · {{ doneTasks.length }} done
         </span>
         <button class="btn-primary text-xs px-3 py-1.5" @click="showAddTask = true">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -17,7 +17,7 @@
       </div>
 
       <!-- Columns -->
-      <div class="flex-1 overflow-hidden flex gap-0">
+      <div class="kanban-board flex-1 overflow-hidden flex gap-0">
         <!-- TODO -->
         <div class="flex-1 flex flex-col border-r border-gray-800 overflow-hidden">
           <div class="flex items-center gap-2 px-4 py-3 shrink-0">
@@ -50,7 +50,7 @@
         </div>
 
         <!-- IN PROGRESS -->
-        <div class="flex-1 flex flex-col overflow-hidden">
+        <div class="flex-1 flex flex-col border-r border-gray-800 overflow-hidden">
           <div class="flex items-center gap-2 px-4 py-3 shrink-0">
             <div class="w-2 h-2 rounded-full bg-yellow-500" />
             <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">In Progress</span>
@@ -79,12 +79,43 @@
             </div>
           </div>
         </div>
+
+        <!-- DONE -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+          <div class="flex items-center gap-2 px-4 py-3 shrink-0">
+            <div class="w-2 h-2 rounded-full bg-green-500" />
+            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Done</span>
+            <span class="ml-auto text-xs text-gray-600 bg-gray-800 rounded-full px-2 py-0.5">{{ doneTasks.length }}</span>
+          </div>
+          <div class="flex-1 overflow-y-auto px-3 pb-4">
+            <draggable v-model="doneTasksDraggable" group="tasks" item-key="id" :animation="150"
+              ghost-class="ghost-card" drag-class="drag-card" class="space-y-2 min-h-[60px]"
+              @end="onDragEnd">
+              <template #item="{ element }">
+                <TaskCard :task="element"
+                  @open="openDetail(element)"
+                  @edit="openEdit(element)"
+                  @delete="deleteTask(element.id)"
+                  @move-to-progress="moveTask(element, 'in_progress')" />
+              </template>
+            </draggable>
+            <div v-if="doneTasks.length === 0 && !tasksStore.loading"
+              class="flex flex-col items-center justify-center py-10 text-center">
+              <div class="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center mb-3">
+                <svg class="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <p class="text-xs text-gray-600">Nothing done yet</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- ── Task Detail Side Panel ───────────────────────────────────────────── -->
     <Transition name="slide">
-      <div v-if="detailTask" class="w-80 flex flex-col border-l border-gray-800 bg-gray-950 overflow-hidden shrink-0">
+      <div v-if="detailTask" class="task-detail-panel w-80 flex flex-col border-l border-gray-800 bg-gray-950 overflow-hidden shrink-0">
         <!-- Panel header -->
         <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0">
           <h3 class="text-sm font-semibold text-white truncate flex-1 mr-2">{{ detailTask.title }}</h3>
@@ -208,6 +239,7 @@
               <select v-model="taskForm.status" class="input">
                 <option value="todo">To Do</option>
                 <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
               </select>
             </div>
 
@@ -246,6 +278,10 @@ const inProgressTasks = computed(() =>
   tasksStore.tasks.filter(t => t.status === 'in_progress')
     .sort((a, b) => (a.sort_order ?? a.sortOrder) - (b.sort_order ?? b.sortOrder)))
 
+const doneTasks = computed(() =>
+  tasksStore.tasks.filter(t => t.status === 'done')
+    .sort((a, b) => (a.sort_order ?? a.sortOrder) - (b.sort_order ?? b.sortOrder)))
+
 // Writable computed refs for vuedraggable
 const todoTasksDraggable = computed({
   get: () => [...todoTasks.value],
@@ -253,6 +289,10 @@ const todoTasksDraggable = computed({
 })
 const inProgressTasksDraggable = computed({
   get: () => [...inProgressTasks.value],
+  set: () => { /* handled by onDragEnd */ },
+})
+const doneTasksDraggable = computed({
+  get: () => [...doneTasks.value],
   set: () => { /* handled by onDragEnd */ },
 })
 
@@ -350,7 +390,7 @@ async function deleteTask(id: number) {
   await tasksStore.deleteTask(id)
 }
 
-async function moveTask(task: Task, newStatus: 'todo' | 'in_progress') {
+async function moveTask(task: Task, newStatus: 'todo' | 'in_progress' | 'done') {
   await tasksStore.updateTask(task.id, { status: newStatus })
 }
 
@@ -365,6 +405,10 @@ async function onDragEnd() {
     .filter(t => t.status === 'in_progress')
     .sort((a, b) => (a.sort_order ?? a.sortOrder) - (b.sort_order ?? b.sortOrder))
     .forEach((t, i) => updates.push({ id: t.id, status: 'in_progress', sort_order: i }))
+  allTasks
+    .filter(t => t.status === 'done')
+    .sort((a, b) => (a.sort_order ?? a.sortOrder) - (b.sort_order ?? b.sortOrder))
+    .forEach((t, i) => updates.push({ id: t.id, status: 'done', sort_order: i }))
   if (updates.length) await tasksStore.reorderTasks(updates)
 }
 

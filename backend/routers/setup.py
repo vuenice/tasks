@@ -68,7 +68,7 @@ def post_setup(body: schemas.SetupIn, db: Session = Depends(get_db)):
     except OSError:
         pass
 
-    # Create default agent if none exists
+    # Create default agent if none exists; rename it if the user_name changed
     existing = db.query(models.Agent).filter_by(is_default=True).first()
     if not existing:
         agent_folder = os.path.join(body.folder_path, body.user_name)
@@ -80,8 +80,20 @@ def post_setup(body: schemas.SetupIn, db: Session = Depends(get_db)):
             is_default=True,
         )
         db.add(agent)
+    elif existing.name != body.user_name:
+        # Rename the default agent to match the new user_name
+        existing.name = body.user_name
 
     db.commit()
 
     agents = db.query(models.Agent).all()
     return {"success": True, "agents": [schemas.AgentOut.model_validate(a).model_dump() for a in agents]}
+
+
+@router.post("/reset", response_model=dict)
+def reset_setup(db: Session = Depends(get_db)):
+    """Delete all setup config and agents — used by E2E tests to restore a clean state."""
+    db.query(models.Config).delete()
+    db.query(models.Agent).delete()
+    db.commit()
+    return {"success": True}

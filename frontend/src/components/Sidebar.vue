@@ -71,7 +71,7 @@
               v-model="newAgentName"
               class="input"
               type="text"
-              placeholder="e.g. Researcher"
+              placeholder="Agent name…"
               @keyup.enter="createAgent"
               ref="nameInputRef"
               autofocus

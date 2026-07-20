@@ -2,23 +2,28 @@
 APScheduler service for automated routine execution.
 
 Key functions:
-  start(db)          — called on app startup; loads all active routines from DB
-  register_routine(r) — add / replace a job for a Routine ORM object
-  unregister_routine(id) — remove a job by routine id
-  execute_routine(id) — the actual job function (also callable via /run endpoint)
+  start(db)           -- called on app startup; loads all active routines from DB
+  register_routine(r) -- add / replace a job for a Routine ORM object
+  unregister_routine(id) -- remove a job by routine id
+  execute_routine(id) -- the actual job function (also callable via /run endpoint)
 
 Job flow for each routine trigger:
   1. Load routine + agent from DB
   2. Read CLAUDE.md and SKILL.md from the agent's folder
   3. For every active task (todo | in_progress) belonging to that agent,
-     call `claude -p` with a prompt built from CLAUDE.md + SKILL.md + task info
+     call claude -p with a prompt built from CLAUDE.md + SKILL.md + task info
   4. Save the result as a Claude comment on the task
   5. Trigger comment summarisation for the task
-  6. Update routine.last_run_at
+  6. Mark the task done and transfer it to the next agent:
+       - Uses agent.move_to_agent_id if set (Instructions > After completion)
+       - Falls back to the default human agent (is_default=True)
+       - If the agent IS the default (no other target), marks the task done
+  7. Update routine.last_run_at
 """
 import logging
 import os
 from datetime import datetime
+from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -31,7 +36,7 @@ scheduler = BackgroundScheduler(
 )
 
 
-# ── Lifecycle ──────────────────────────────────────────────────────────────────
+# -- Lifecycle -----------------------------------------------------------------
 
 def start(db=None):
     """
@@ -42,7 +47,6 @@ def start(db=None):
         scheduler.start()
         logger.info("APScheduler started")
 
-    # Re-import here to avoid circular imports at module load
     if db is None:
         from database import SessionLocal
         db = SessionLocal()
@@ -68,7 +72,7 @@ def stop():
         logger.info("APScheduler stopped")
 
 
-# ── Job management ─────────────────────────────────────────────────────────────
+# -- Job management ------------------------------------------------------------
 
 def register_routine(routine) -> bool:
     """
@@ -89,7 +93,7 @@ def register_routine(routine) -> bool:
             args=[routine.id],
         )
         logger.info(
-            "Scheduled routine %d ('%s') → cron '%s'",
+            "Scheduled routine %d ('%s') -> cron '%s'",
             routine.id, routine.label, routine.schedule,
         )
         return True
@@ -106,14 +110,17 @@ def unregister_routine(routine_id: int):
         logger.info("Removed scheduler job for routine %d", routine_id)
 
 
-# ── Execution ─────────────────────────────────────────────────────────────────
+# -- Execution -----------------------------------------------------------------
 
 def execute_routine(routine_id: int):
     """
     Called by APScheduler (or the /run endpoint).
 
     Runs all active tasks belonging to the routine's agent through Claude,
-    posts results as comments, and re-summarises each task.
+    posts results as comments, re-summarises, then transfers each task:
+      - to agent.move_to_agent_id if set (chosen in Instructions > After completion)
+      - else to the default human agent (is_default=True) if it is a different agent
+      - else marks the task done (agent is already the default, or no default found)
     """
     from database import SessionLocal
     from models import Routine, Agent, Task, Comment
@@ -136,21 +143,22 @@ def execute_routine(routine_id: int):
             routine_id, routine.label, agent.name,
         )
 
-        # ── Read CLAUDE.md and SKILL.md ──────────────────────────────────────
+        # Read CLAUDE.md and SKILL.md
         claude_md, skill_md = "", ""
         if agent.folder_path:
-            for fname, attr in (("CLAUDE.md", "claude_md"), ("SKILL.md", "skill_md")):
+            for fname, var in (("CLAUDE.md", "c"), ("SKILL.md", "s")):
                 path = os.path.join(agent.folder_path, fname)
                 try:
                     with open(path, encoding="utf-8") as fh:
-                        if attr == "claude_md":
-                            claude_md = fh.read()
+                        content = fh.read()
+                        if var == "c":
+                            claude_md = content
                         else:
-                            skill_md = fh.read()
+                            skill_md = content
                 except OSError:
                     pass
 
-        # ── Iterate active tasks ──────────────────────────────────────────────
+        # Iterate active tasks
         tasks = (
             db.query(Task)
             .filter(
@@ -161,7 +169,7 @@ def execute_routine(routine_id: int):
         )
 
         if not tasks:
-            logger.info("No active tasks for agent '%s' — nothing to do", agent.name)
+            logger.info("No active tasks for agent '%s' -- nothing to do", agent.name)
         else:
             cwd = agent.folder_path or "."
             for task in tasks:
@@ -193,7 +201,40 @@ def execute_routine(routine_id: int):
                 texts = [f"[{c.author}] {c.content}" for c in all_comments]
                 task.summary = summarize_comments(task.title, texts)
 
-        # ── Update last_run_at ────────────────────────────────────────────────
+                # Determine transfer target:
+                #   1. agent.move_to_agent_id  (set in Instructions tab)
+                #   2. the default human agent (is_default=True)
+                #   3. mark done if this agent IS the default (or no default found)
+                target_agent_id: Optional[int] = agent.move_to_agent_id
+
+                if not target_agent_id:
+                    default_agent = (
+                        db.query(Agent).filter_by(is_default=True).first()
+                    )
+                    if default_agent and default_agent.id != agent.id:
+                        target_agent_id = default_agent.id
+
+                if target_agent_id and target_agent_id != agent.id:
+                    sort_pos = (
+                        db.query(Task)
+                        .filter_by(agent_id=target_agent_id)
+                        .count()
+                    )
+                    task.agent_id = target_agent_id
+                    task.status = "todo"
+                    task.sort_order = sort_pos
+                    logger.info(
+                        "Task %d ('%s') transferred to agent %d after completion",
+                        task.id, task.title, target_agent_id,
+                    )
+                else:
+                    task.status = "done"
+                    logger.info(
+                        "Task %d ('%s') marked done (no transfer target)",
+                        task.id, task.title,
+                    )
+
+        # Update last_run_at
         routine.last_run_at = datetime.utcnow()
         db.commit()
         logger.info("Routine %d ('%s') completed", routine_id, routine.label)
