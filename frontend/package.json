@@ -9,8 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@rollup/rollup-linux-x64-gnu": "^4.60.4",
     "@vueuse/core": "^11.0.0",
     "axios": "^1.7.0",
+    "esbuild": "^0.28.0",
     "pinia": "^2.2.0",
     "sortablejs": "^1.15.2",
     "vue": "^3.5.0",
@@ -18,6 +20,7 @@
     "vuedraggable": "^4.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/typography": "^0.5.14",
     "@vitejs/plugin-vue": "^5.1.0",
     "autoprefixer": "^10.4.20",

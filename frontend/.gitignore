@@ -39,3 +39,4 @@ Thumbs.db
 
 # Vite
 *.local
+vite.config.ts.timestamp-*.mjs
